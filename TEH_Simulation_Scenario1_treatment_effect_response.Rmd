@@ -730,14 +730,14 @@ plot_theme <- theme(
 ######################
 ## variable importance plot
 ## standard permutation variable importance
-p_importance <- ggplot(head(importance_scores %>% arrange(-vi) %>% filter(vi>0), 15),
+p_importance <- ggplot(head(importance_scores %>% arrange(-vi) %>% filter(vi>0), 10),
                        aes(reorder(variable, vi), vi)) +
   geom_col(color="black", fill = "lightblue" ) + 
   xlab("Variables") + ylab("") +
   # ylab("Variable importance\n(average increase in OOB-MSE\n under permutation)")+
   theme_classic() + coord_flip() + plot_theme 
 
-ggsave("/Users/tianyuzheng/Documents/PKU RA/Novartis/Figures/var_importance.png", p_importance, width = 6, height = 4, units = "in")
+ggsave("/Users/tianyuzheng/Documents/PKU RA/Novartis/Figures/var_importance_treatment_effect_response.png", p_importance, width = 6, height = 4, units = "in")
 # saveRDS(p_importance, file = "reports/figures/var_importance.rds")
 
 ## select top 10 variables of interest
