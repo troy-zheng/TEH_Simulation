@@ -78,11 +78,13 @@ ggplot(X, aes(x = factor(X31), fill = factor(X32))) +
 #Define prog and pred function and calculate b1
 prog <- "0.5*X32"
 pred <- "X32"
-get_b(X, scal,prog, pred, trt,
+coeff_all <- get_b(X, scal,prog, pred, trt,
       type = "continuous",
       power = c(0.5, 0.8), alpha = c(0.025, 0.1),
       start = c(0, 0), sigma_error = 1
 )
+
+b1_star <- coeff_all[2]
 
 summary(X$X32)
 
@@ -91,8 +93,8 @@ summary(X$X32)
 
 ```{r cleaning, echo=FALSE}
 #We simulate b1=2*(b1*).
-get_b0(X, scal, prog, pred, trt,
-       b1 = 0.50093762*2, type = "continuous",
+b0_star <- get_b0(X, scal, prog, pred, trt,
+       b1 = b1_star*2, type = "continuous",
        power = 0.5, alpha = 0.025, interval = c(-2, 2), sigma_error = 1
 )
 #We have b0=-0.07471085.
@@ -101,7 +103,7 @@ get_b0(X, scal, prog, pred, trt,
 ```{r cleaning, echo=FALSE}
 #Calculate response variable based on b0 and b1
 dat <- generate_y(X, trt, prog ,
-                  pred , b0 = -0.07471085, b1 =0.50093762*2,
+                  pred , b0 = b0_star, b1 =b1_star*2,
                   type = "continuous", sigma_error = 3)
 
 #Recode categorical variables as 0/1
