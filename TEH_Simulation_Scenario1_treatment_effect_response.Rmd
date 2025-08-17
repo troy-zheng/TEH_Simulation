@@ -1,4 +1,4 @@
-_---
+---
 title: "Heter Mimic"
 output: html_document
 date: "2025-07-15"
@@ -8,7 +8,7 @@ date: "2025-07-15"
 #Libraries set-up
 library(benchtm)
 library(dplyr)
-set.seed(12345)
+set.seed(1)
 library(tidyverse)
 library(nnls)
 library(SuperLearner)
@@ -31,53 +31,75 @@ library(xgboost)
 
 ```{r data S1}
 #Generate 30 Xs from data_syn
+# Example data
+
 scal <- 1
 X <- generate_X_syn(n=500* scal)
 trt <- generate_trt(n=500* scal, p_trt = 0.5)
+
+plot(density(X$X11))
+
 
 ```
 
 ```{r}
 ##Model setup
 ##Add Region(X31)
-probs <- c(N = 0.75, O = 0.25)  
-region <- rmultinom(n = 1, size = 500, prob = probs)
-X$Xregion <- factor(rep(names(probs), times = region[,1])) 
+#probs <- c(N = 0.75, O = 0.25)  
+#region <- rmultinom(n = 1, size = 500, prob = probs)
+#X$Xregion <- factor(rep(names(probs), times = region[,1])) 
 
-X$X31 <- NA  # Initialize
+#X$X31 <- NA  # Initialize
 
-X$X31[X$Xregion == "N"] <- 0
-X$X31[X$Xregion == "O"] <- 1
+#X$X31[X$Xregion == "N"] <- 0
+#X$X31[X$Xregion == "O"] <- 1
 
-table(X$X31)
+#table(X$X31)
+
+# assumes data.frame X with column X11
+x <- X$X11
+m <- sum(!is.na(x))
+k <- ceiling(0.25 * m)   # number of 1's desired
+
+# rank from largest to smallest; break ties randomly to hit target proportion
+rk <- rank(-x, ties.method = "random")
+X$X31 <- as.integer(rk <= k)   # 1 for top 25%, else 0
+
+# check proportion and correlation
+mean(X$X11_bin, na.rm = TRUE)                  # ~0.25
+cor(X$X11, X$X31, use = "complete.obs")        # typically ~0.85–0.95
+
+plot(X$X11, X$X31)
+
+summary(X$X31)
 
 ```
 
 ```{r}
 # Assign X2(X32) based on region
-X$X32[X$Xregion == "N"] <- sample(c(0, 1), size = sum(X$Xregion == "N"), replace = TRUE, prob = c(0.95, 0.05))
-X$X32[X$Xregion == "O"] <- sample(c(0, 1), size = sum(X$Xregion == "O"), replace = TRUE, prob = c(0.05, 0.95))
+#X$X32[X$Xregion == "N"] <- sample(c(0, 1), size = sum(X$Xregion == "N"), replace = TRUE, prob = c(0.95, 0.05))
+#X$X32[X$Xregion == "O"] <- sample(c(0, 1), size = sum(X$Xregion == "O"), replace = TRUE, prob = c(0.05, 0.95))
 
-cor(X$X32,X$X31)
+#cor(X$X32,X$X31)
 
-table(X$X32,X$X31)
-prop.table(table(X$X32, X$X31), margin = 2)  # Check proportions by region
+#table(X$X32,X$X31)
+#prop.table(table(X$X32, X$X31), margin = 2)  # Check proportions by region
 
-ggplot(X, aes(x = factor(X31), fill = factor(X32))) +
-  geom_bar(position = "fill") +
-  labs(
-    title = "Proportion of U within Each Level of X31",
-    x = "X31",
-    y = "Proportion",
-    fill = "U"
-  ) +
-  theme_minimal()
+#ggplot(X, aes(x = factor(X31), fill = factor(X32))) +
+#  geom_bar(position = "fill") +
+#  labs(
+#    title = "Proportion of U within Each Level of X31",
+#    x = "X31",
+#    y = "Proportion",
+#    fill = "U"
+#  ) +
+#  theme_minimal()
 ```
 
 ```{r }
 #Define prog and pred function and calculate b1
-prog <- "0.5*X32"
-pred <- "X32"
+prog <- "2.32*(0.5*(X1=='Y')+X11)"
+pred <- "pnorm(20*(X11-0.5)) "
 coeff_all <- get_b(X, scal,prog, pred, trt,
       type = "continuous",
       power = c(0.5, 0.8), alpha = c(0.025, 0.1),
@@ -86,7 +108,6 @@ coeff_all <- get_b(X, scal,prog, pred, trt,
 
 b1_star <- coeff_all[2]
 
-summary(X$X32)
 
 #We have b1*=0.2049954.Then we consider five situations: b1=0,b1=0.5*(b1*),b1=1*(b1*),b1=1.5*(b1*),b1=2*(b1*).
 ```
@@ -97,6 +118,7 @@ b0_star <- get_b0(X, scal, prog, pred, trt,
        b1 = b1_star*2, type = "continuous",
        power = 0.5, alpha = 0.025, interval = c(-2, 2), sigma_error = 1
 )
+
 #We have b0=-0.07471085.
 ```
 
@@ -292,10 +314,6 @@ dev.off()
 
 ```
 
-```{r pressure, echo=FALSE}
-plot(pressure)
-```
-
 ## Step 3
 
 ```{r preprocessing, echo=FALSE}
@@ -453,10 +471,6 @@ for (v in vars_impute$rowname) {
 saveRDS(df_univariate_impute, file = "/Users/tianyuzheng/Documents/PKU RA/Novartis/Figures/analysis_univ_imputed.rds")
 saveRDS(df_regress_impute, file = "/Users/tianyuzheng/Documents/PKU RA/Novartis/Figures/analysis_regress_imputed.rds")
 
-```
-
-```{r pressure, echo=FALSE}
-plot(pressure)
 ```
 
 ## Step 4
@@ -629,13 +643,13 @@ plot(cf_vi, type = "box")
 
 
 ## Global heterogeneity test using coin
-test <- coin::independence_test(y ~ ., data.frame(X_pi, y = phi), teststat="quadratic")
-p_value <- coin::pvalue(test)
-p_value
+#test <- coin::independence_test(y ~ ., data.frame(X_pi, y = phi), teststat="quadratic")
+#p_value <- coin::pvalue(test)
+#p_value
 
-saveRDS(p_value,
-        file = "/Users/tianyuzheng/Documents/PKU RA/Novartis/Figures/p_value.rds"
-)
+#saveRDS(p_value,
+#        file = "/Users/tianyuzheng/Documents/PKU RA/Novartis/Figures/p_value.rds"
+#)
 
 ## Optional: can produce p-values for the importance ranking
 ## p-values for variable importance
@@ -659,23 +673,25 @@ saveRDS(p_value,
 ## data.frame(variable = names(cf_vi$values), surprise = -log2(p_values))
 
 ## Optional: can assess univariate association by LR test based on linear model
-## pval <- numeric(n_cov)
-## lm_fit_null <- lm(y ~ ., data = data.frame(y=phi))
-## LR_null <- logLik(lm_fit_null)
-## for (j in 1:n_cov) {
-##   lm_fit <- lm(y ~ ., data = data.frame(x=X_pi[,j], y=phi))
-##   pval[j] <- anova(lm_fit, lm_fit_null)[["Pr(>F)"]][2]
-## }
-## ## present p-value on "surprise" scale
-## data.frame(variable = colnames(X_pi), surprise = -log2(pval))
-
+ pval <- numeric(n_cov)
+ lm_fit_null <- lm(y ~ ., data = data.frame(y=phi))
+ LR_null <- logLik(lm_fit_null)
+ for (j in 1:n_cov) {
+   lm_fit <- lm(y ~ ., data = data.frame(x=X_pi[,j], y=phi))
+   pval[j] <- anova(lm_fit, lm_fit_null)[["Pr(>F)"]][2]
+ }
+ ## present p-value on "surprise" scale
+ temp<-data.frame(variable = colnames(X_pi), surprise = pval)
+ 
+ p_value <- temp %>%
+  filter(variable == "X11") %>%
+  select(variable, surprise)
+ 
 importance_scores <- data.frame(
   variable = names(cf_vi$values),
   vi = cf_vi$values #, cond_vi = cf_vi_cond$values
 )
 saveRDS(importance_scores, file = "/Users/tianyuzheng/Documents/PKU RA/Novartis/Figures/importance.rds")
-
-
 
 # 
 # ### Optional: interaction variable importance based on partial dependence function
@@ -701,6 +717,10 @@ saveRDS(importance_scores, file = "/Users/tianyuzheng/Documents/PKU RA/Novartis/
 #                    export = list(fit = fit, comb_var = comb_var))
 
 #saveRDS(res %>% bind_rows(), file = "/Users/tianyuzheng/Documents/PKU RA/Novartis/Figures/importance_inter.rds")
+
+p_value1 <- temp %>%
+  filter(variable == "X11") %>%
+  select(variable, surprise)
 ```
 ## Step 5
 
@@ -732,18 +752,25 @@ plot_theme <- theme(
 ######################
 ## variable importance plot
 ## standard permutation variable importance
-p_importance <- ggplot(head(importance_scores %>% arrange(-vi) %>% filter(vi>0), 10),
+p_importance <- ggplot(head(importance_scores %>% arrange(-vi) %>% filter(vi>0), 5),
                        aes(reorder(variable, vi), vi)) +
   geom_col(color="black", fill = "lightblue" ) + 
   xlab("Variables") + ylab("") +
   # ylab("Variable importance\n(average increase in OOB-MSE\n under permutation)")+
   theme_classic() + coord_flip() + plot_theme 
 
-ggsave("/Users/tianyuzheng/Documents/PKU RA/Novartis/Figures/var_importance_scene1_treatment_effect_response.png", p_importance, width = 6, height = 4, units = "in")
+ggsave("/Users/tianyuzheng/Documents/PKU RA/Novartis/Figures/var_importance.png", p_importance, width = 6, height = 4, units = "in")
 # saveRDS(p_importance, file = "reports/figures/var_importance.rds")
 
 ## select top 10 variables of interest
-vars_to_plot <- rownames(head(importance_scores %>% arrange(-vi), 10))
+vars_to_plot <- rownames(head(importance_scores %>% arrange(-vi), 5))
+
+vars_to_plot <- importance_scores %>%
+  arrange(desc(vi)) %>%             # sort by descending vi
+  slice_head(n = 5) %>%             # take top 5
+  mutate(rank = row_number()) %>%   # add rank column
+  select(rank, variable, vi)        # reorder columns if you like
+
 
 ## scatterplot matrix of variables of interest to identify potential
 ## correlations/dependencies
@@ -816,5 +843,11 @@ p1 <- ggplot(adat, aes(x =X32, fill = X31)) +
   labs(title = "Overlap of X32 by Region", x = "X31", y = "Density") +
   theme_minimal()
 p1
+
+
+
+
+
+
 
 ```
