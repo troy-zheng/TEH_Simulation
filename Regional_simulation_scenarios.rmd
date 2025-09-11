@@ -1,0 +1,779 @@
+---
+title: "Explore_MRCT_Region_Simulation_Scenario"
+author: "Cong Zhang"
+date: "2025-09-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, cache = TRUE)
+```
+
+## Introduction
+In this analysis, we explore the correlation between the "Region" variable and other covariates in synthetic data. Specifically, we aim to:
+
+1. Check the correlation between "Region" variable and other baseline covariates in the synthetic trial data.
+2. Simulate the "Region" variable using other covariates (e.g., `X11` and `X14`) while varying odds ratios (OR).
+3. Examine imbalances caused by different OR values using standard mean difference (SMD).
+
+```{r}
+set.seed(9080)
+library(benchtm)
+library(tidyverse)
+library(ggpubr)
+library(kableExtra)
+```
+
+
+## Correlation between Region and other baseline covariates
+
+We used the synthetic data generated based on cosentyx pool to check the correlation between `region` and other baseline covariates in real clinical trials.
+
+``
+
+```{r warning=FALSE}
+## X3 in the synthetic data is region
+## get the correlation for each cetegory for reference
+
+test_dat <- generate_X_syn(n = 2000)
+table(test_dat$X3)/nrow(test_dat)
+
+## use x3 = x (North Ametica & Austrilia) as example
+test_dat <- test_dat %>%
+  mutate(Region = ifelse(X3 == "c", 1, 0))
+perc_NothA <- sum(test_dat$Region)/nrow(test_dat)*100
+```
+
+The `x3` variable in synthetic data indicates `region` while level `c` corresponds to "North America & Austrilia" with proportion equals `r perc_NothA` %. We let $Region = 1$ for North America & Austrilia and $0$ for the rest`.
+
+
+Then univariate logistic regression and multivariate logistic regression are used to model Region and other baseline covariates and the coef values and ORs are shown.
+
+```{r}
+## check correlation between X3 and other covariates
+# using univariate logistic regression
+logistic_uni_results <- data.frame()
+
+for (var in colnames(test_dat)[!colnames(test_dat) %in% c("Region")]) {
+  model <- glm(Region ~ ., data = test_dat[, c(var, "Region")], family = binomial)
+  
+  coef <- coef(model)[2]
+  odds_ratio <- exp(coef)
+  
+  logistic_uni_results <- rbind(logistic_uni_results, 
+                                data.frame(Variable = var,
+                                           Coefficient = round(coef, 2),
+                                           Odds_Ratio = round(odds_ratio, 2)))
+}
+
+
+
+logistic_uni_results <- logistic_uni_results %>%
+  filter(Variable != "X3") %>%
+  rownames_to_column("var") %>%
+  mutate(type = ifelse(stringr::str_detect(var, "\\d$"),
+                       "Continuous", "Categorical"),
+         model = "Uni-variate logistic regression") %>%
+  dplyr::select(-var)
+
+kable(logistic_uni_results)
+
+p1 <- ggplot(data = logistic_uni_results, aes(x = Odds_Ratio, fill = type)) +
+  geom_histogram() +
+  facet_wrap(~type, nrow = 2)+
+  theme_bw() +
+  ggtitle("Odds Ratio in Uni-variate Logistic Regression")
+
+
+
+p2 <- ggplot(data = logistic_uni_results, aes(x = abs(Coefficient), fill = type)) +
+  geom_histogram() +
+  facet_wrap(~type, nrow = 2)+
+  theme_bw()+
+  ggtitle("Coefficient value in Uni-variate Logistic Regression")
+ggarrange(p1, p2, common.legend = TRUE)
+
+
+# Multi variate logistic regression
+full_model <- glm(Region ~ ., data = test_dat[,-3], family = binomial)
+null_model <- glm(Region ~ 1, data = test_dat[,-3], family = binomial)
+
+stepwise_model <- step(null_model,
+                       scope = list(lower = null_model, upper = full_model),
+                       direction = "both", trace = FALSE)
+
+# summary(stepwise_model)
+
+final_coef <- coef(stepwise_model)
+final_OR <- exp(final_coef)
+
+stepwise_results <- data.frame(Variable = names(final_OR),
+                               Coefficient = round(final_coef, 2),
+                               Odds_Ratio = round(final_OR, 2))
+# print(stepwise_results)
+
+stepwise_results <- stepwise_results %>%
+  filter(Variable != "(Intercept)")%>%
+  mutate(type = ifelse(stringr::str_detect(Variable, "\\d$"),
+                       "Continuous", "Categorical"),
+         Variable = gsub("\\D$","", Variable),
+         model = "Multi-variate logistic regression") 
+kable(stepwise_results)
+```
+
+
+## Simulating Region Imbalance
+
+We simulate the `Region` variable by using relevant covariates (e.g., `X11` and `X14`) with a logisitc model and varying their associated odds ratios. A key part of this process is evaluating how the simulated `Region` variable shows imbalance of associated variables between groups (`Region = 1` and `Region = 0`). Two metrics are used to measure imbalance:
+
+1. **Standardized Mean Difference (SMD)**:  
+   This metric is used for continuous variables to quantify the difference in mean values between two groups, standardized by their pooled standard deviation. The formula for SMD is:
+   \[
+   \text{SMD} = \frac{\lvert \text{Mean}_{\text{Group 1}} - \text{Mean}_{\text{Group 0}} \rvert}{\sqrt{\frac{\text{SD}_{\text{Group 1}}^2 + \text{SD}_{\text{Group 0}}^2}{2}}}.
+   \]
+   SMD values close to zero indicate a better balance between groups, whereas larger values suggest increasing imbalance.
+
+2. **Pearson Correlation**:  
+   For categorical variables, imbalance is quantified using Pearson correlation between the binary `Region` variable and the categorical covariate. Higher correlation values indicate a stronger predictive relationship between the covariate and the region assignment, which may result in group imbalance.
+
+We use these metrics to examine the impacts of changing OR values on the simulated distributions.
+
+## Functions for Simulating `Region`
+
+
+To simulate the binary `Region` variable, we utilize a logistic regression model based on selected covariates that have been scaled to range between 0 and 1. The model calculates the log-odds (logit) of being assigned to `Region = 1` using the formula:
+
+\[
+\text{logit}\left(\text{P(Region = 1)}\right) = \alpha + \beta_1 X_1 + \beta_2 X_2
+\]
+
+Here:
+
+- \(X_1\) and \(X_2\) represent the chosen covariates, scaled to fall within the range [0, 1].
+- \(\beta_1\) and \(\beta_2\) are the respective coefficients for the covariates, reflecting their influence on the log-odds ratio of being in `Region = 1`.
+- \(\alpha\) denotes the intercept term, which is iteratively adjusted during simulation to achieve a desired target probability for `Region = 1` (e.g., ensuring approximately 20% of the population is assigned to `Region = 1`).
+- The coefficient (\(\beta\)) is directly related to the OR by $\text{OR} = \exp(\beta)$.
+
+By scaling predictors and tuning ORs, this method enables controlled exploration of region assignment and provides insights into the predictive behavior of covariates under varying conditions.
+
+### Process:
+1. **Design Matrix Creation**:  
+   A design matrix is constructed based on the chosen covariates. Each row corresponds to an observation, and each column represents the values of a covariate.
+
+2. **Intercept Adjustment**:  
+   To ensure the desired proportion (e.g., 20% in `Region = 1`), an iterative root-finding method is applied to adjust the intercept term ($\alpha$) until the simulated probability matches the target.
+
+3. **Probability Calculation**:  
+   Once the intercept ($\alpha$) and coefficients ($\beta$) are defined, probabilities are computed for each observation using the logistic function.
+
+4. **Region Assignment**:  
+   The probabilities are used to assign `Region` values for each observation. Using a Bernoulli distribution, each observation is randomly assigned to `Region = 1` or `Region = 0` based on its calculated probability.
+
+This simulation method allows for systematic testing of how different coefficients  ($\beta$s)) associated with covariates impact the group imbalance of the `Region` variable. It is particularly useful for evaluating imbalances caused by varying odds ratios.
+
+**Note on Scaled Covariates**: All continuous variables have been normalized to fall within the range of $(0, 1)$. Consequently, the interpretation of an OR reflects the change in odds associated with a one-unit increase within this rescaled range. For example, an OR value of $2$ indicates that the odds of belonging to `Region = 1` are increased by $2-1$ times for every unit increase in the normalized covariate.
+
+
+```{r used function}
+# ================================ #
+# Step 2: Define Asian parameters
+# ================================ #
+add_region <- function(data, covariates, betas, target_prob){
+  formula_design <- as.formula(paste0("~ ", paste0(covariates, collapse = "+"), " -1"))
+  design_matrix <- model.matrix( formula_design, data = data)
+  objective <- function(a, X, b) {mean(1 / (1 + exp(-(a + X %*% b )))) - target_prob}
+  a <- uniroot(objective, X = design_matrix, b = betas, interval = c(-10, 10))$root
+  # Compute predicted probabilities and simulate Y
+  prob <- as.numeric(1 / (1 + exp(-(a + design_matrix %*% betas ))))
+  Y_region <- rbinom(nrow(data), 1, prob)
+  
+  # Create data frame
+  df <- data %>% mutate(RegionN = Y_region, Region = factor(ifelse(Y_region == 1, "Asian", "Non-Asia")))
+  df
+}
+
+# ================================ #
+# Step 3: Evaluation of Generated Data
+# ================================ #
+evaluate_region_imbalance <- function(data, continuous_vars = NULL, categorical_vars = NULL) {
+  # Continuous variable SMD
+  smd_calculation <- function(data, var, region_var) {
+    region_means <- data %>% group_by(!!sym(region_var)) %>% summarise(
+      mean_val = mean(!!sym(var)), sd_val = sd(!!sym(var))
+    )
+    mean_diff <- abs(region_means$mean_val[1] - region_means$mean_val[2])
+    pooled_sd <- sqrt(sum(region_means$sd_val^2) / 2)
+    mean_diff / pooled_sd
+  }
+  
+  if(!is.null(continuous_vars)){
+    smd_scores <- map_dbl(continuous_vars, ~ smd_calculation(data, var = .x, region_var = "Region"))
+    smd_df <- tibble(Variable = continuous_vars, SMD = smd_scores)
+  }else{
+    smd_df <- NULL
+  }
+
+  
+  # Categorical variable correlation
+  if(!is.null(categorical_vars)){
+    correlation_scores <- map_dbl(categorical_vars, ~ cor(as.numeric(data[[.x]]), as.numeric(data$RegionN)))
+    correlation_df <- tibble(Variable = categorical_vars, Correlation = correlation_scores)
+  }else{
+    correlation_df <- NULL
+  }
+
+  list(SMD_df = smd_df, Correlation_df = correlation_df)
+}
+
+# Visualization Function
+plot_region_distribution <- function(data, continuous_vars, categorical_vars, beta_values, formula_text) {
+  plots <- list()
+  
+  if(!is.null(continuous_vars)){
+    # Plot continuous variables (boxplot)
+    for (var in continuous_vars) {
+      p <- ggplot(data, aes(x = Region, y = !!sym(var), fill = Region)) +
+        geom_boxplot() +
+        labs(
+          title = paste("Distribution of", var, "across Regions"),
+          subtitle = paste("Formula:", formula_text),
+          x = "Region",
+          y = var
+        ) +
+        theme_minimal()
+      plots[[paste0("boxplot_", var)]] <- p
+    }
+  }
+
+  if(!is.null(categorical_vars)){
+    # Plot categorical variables (percentage bar chart)
+    for (var in categorical_vars) {
+      p <- data %>%
+        group_by(Region, !!sym(var)) %>%
+        summarise(counts = n()) %>%
+        group_by(Region) %>%
+        mutate(percent = counts / sum(counts)) %>%
+        ggplot(aes(x = Region, y = percent, fill = !!sym(var))) +
+        geom_bar(stat = "identity") +
+        labs(
+          title = paste("Percentage Distribution of", var, "across Regions"),
+          subtitle = paste("Formula:", formula_text),
+          x = "Region",
+          y = "Percentage"
+        ) +
+        theme_minimal()
+      plots[[paste0("bar_", var)]] <- p
+    }
+  }
+
+  
+  plots
+}
+
+
+
+# ================================ #
+# Step 4: Systematic Testing for Different Betas
+# ================================ #
+test_betas <- function(data, beta_values, covariates, target_prob,
+                       continuous_vars = NULL, categorical_vars = NULL,
+                       plot = FALSE) {
+  results <- list()
+  result_plot <- list()
+  for(i in 1:nrow(beta_values)){
+    beta_vec <- as.numeric(beta_values[i,])
+    
+    # Generate formula text dynamically
+    formula_text <- paste("~", paste(paste0("log(", exp(beta_vec), ")*", covariates), collapse = " + "))
+    message("Testing Beta: ", formula_text)
+    
+    
+    dat2 <- add_region(data = data, covariates = covariates, betas = beta_vec, target_prob = target_prob)
+    
+    ## plot
+    if(plot){
+      p <- plot_region_distribution(dat2, continuous_vars, categorical_vars, beta_values, formula_text)
+      # p <- ggarrange(plotlist = result_plots , nrow = 1)
+      result_plot <- c(result_plot, p)
+    }
+    
+    ## summary
+    eval_results <- evaluate_region_imbalance(dat2, continuous_vars, categorical_vars)
+    if(!is.null(continuous_vars)){
+      eval_results$SMD_df <- eval_results$SMD_df %>% mutate(formula = formula_text)
+    }
+    
+    if(!is.null(categorical_vars)){
+      eval_results$Correlation_df <- eval_results$Correlation_df %>% mutate(formula = formula_text)
+    }
+    
+    results[[i]] <- list(Results = eval_results)
+    
+  }
+
+  results
+  
+  list(results = results,
+       result_plot = result_plot)
+}
+
+```
+
+
+We started with how it is used in the simulated data for TEH exploration. An example case with continuous response `y` is selected.
+The generation of `region` only involves `X` matrix, so it is the same for other pre-specified heterogeneity cases.
+
+```{r data generation, echo = TRUE}
+# ================================ #
+# Step : Data generation
+# ================================ #
+data(scen_param)
+
+# Filter continuous cases and generate dataset
+cases <- (scen_param %>% filter(type == "continuous"))
+
+dat <- generate_scen_data(scen = cases[3, ], include_truth = TRUE) %>% 
+  mutate_if(is.character, as.factor)
+```
+
+We start with generating `region` variable based on $X11$. Odds ratios corresponding to beta values \(\beta_1\) were set to \([1, 2, 5, 8, 10, 15, 20]\). `Region` variable is generated with a target probability of 20% for `Region = 1`. 
+
+```{r echo = TRUE}
+# ================================ #
+# Step: Generate Beta Test Results for X11
+# ================================ #
+
+# Select covariates
+region_covariates <- c("X11")  # Example continuous predictors
+continuous_vars <- c("X11")
+
+# Beta values to test
+beta_values <- data.frame(b1 = c(0, log(2), log(5), log(8), log(10), log(15), log(20)))  # Corresponding OR = 1, 2, 5, 8, 10, 20
+
+# Generate test results
+results_combined <- test_betas(dat, beta_values, region_covariates, target_prob = 0.2,
+                               continuous_vars, categorical_vars = NULL,
+                               plot = TRUE)
+
+result_X11 <- do.call("rbind",lapply(results_combined$results, function(x) x$Results$SMD_df))
+result_X11
+```
+
+Visualize the imbalance of $X11$ via the boxplot of $X11$ by region:
+
+```{r fig.width= 16, fig.height= 16}
+ggarrange(plotlist = results_combined$result_plot, common.legend = TRUE)
+```
+
+
+## Evaluation of Imbalance Under Different Covariate Settings and Odds Ratios
+
+To evaluate the impact of varying odds ratios on the imbalance of the simulated `Region` variable, we conducted systematic tests under two different covariate settings: 
+
+1. **Single-Predictor Setting**:  
+   The simulation used a single continuous covariate `X11` to predict `Region`. Odds ratios corresponding to beta values \(\beta_1\) were set to \([1, 2, 5, 8, 10, 15, 20]\). These OR values were chosen to span a wide range of potential predictive influences.
+
+2. **Multi-Predictor Setting**:  
+   The simulation included both continuous covariates `X11` and `X14`. Odds ratios for \(\beta_1\) (associated with `X11`) and \(\beta_2\) (associated with `X14`) were set to \([1, 2, 5, 10, 15]\), resulting in a matrix of combined OR values.
+
+### Procedure
+For each covariate setting, we performed 100 repetitions of the simulation process at each specific combination of OR values. The simulations aimed to generate the `Region` variable with a target probability of 20% for `Region = 1`. Under each repetition, imbalance was measured using:
+
+- **Standardized Mean Difference (SMD)**:  
+  SMD measures the mean difference between the groups (`Region = 1` and `Region = 0`), standardized by the pooled standard deviation. It is particularly effective for continuous covariates.
+
+At the end of the repetitions, we summarized the results by calculating the mean and standard deviation (SD) of SMD values across the 100 repetitions for each OR scenario.
+
+### Results
+The final summarized results for both single- and multi-predictor settings present the following metrics:
+
+- **Mean SMD**: Indicates the average level of imbalance across repetitions for a given OR combination.
+- **SD of SMD**: Reflects the variability in imbalance levels across repetitions.
+
+### Result for **Single-Predictor Setting**
+
+```{r}
+# Select covariates (single-predictor case)
+region_covariates <- c("X11")  # Continuous covariate
+continuous_vars <- c("X11")
+
+# Beta values to test
+beta_values <- data.frame(b1 = c(0, log(2), log(5), log(8), log(10), log(15), log(20)))  # Testing range of Odds Ratios
+
+# Number of repetitions
+n_repeats <- 100
+
+# Initialize storage for results across repetitions
+repeated_smd_results_X11 <- vector("list", n_repeats)
+
+# Run the repetitions
+for (rep in 1:n_repeats) {
+  message("Replication:", rep)
+  # Use test_betas for a single replication
+  results_combined <- test_betas(dat, beta_values, region_covariates, 
+                                 target_prob = 0.2, continuous_vars = continuous_vars, categorical_vars = NULL)
+  
+  # Store SMD results within the current replication
+  repeated_smd_results_X11[[rep]] <- do.call("rbind", lapply(results_combined$results, function(x) x$Results$SMD_df))
+}
+
+# Combine replicated results and calculate mean/SD
+result_X11_summary <- bind_rows(repeated_smd_results_X11) %>%
+  group_by(Variable, formula) %>%
+  summarise(
+    Mean_SMD = mean(SMD),
+    SD_SMD = sd(SMD),
+    lower_95CI = Mean_SMD - 1.96 * (SD_SMD / sqrt(n())),
+    upper_95CI = Mean_SMD + 1.96 * (SD_SMD / sqrt(n()))
+  )
+
+result_X11_summary <- result_X11_summary %>%
+  mutate(OR_b1 = gsub("~ log\\((\\d+)\\).*","\\1", formula),
+         OR_b1 = as.integer(OR_b1)) %>%
+  arrange(OR_b1)
+
+kable(result_X11_summary)
+```
+
+
+We displayed how SMD changes as OR for `X11` increases.
+
+```{r}
+ggplot(result_X11_summary, aes(x = OR_b1, y = Mean_SMD)) +
+  geom_point(size = 2) + # Mean points
+  geom_line(size = 1) + # Line connecting points
+  geom_errorbar(aes(ymin = lower_95CI, ymax = upper_95CI), width = 0.5) + # Error bar
+  scale_x_continuous(breaks = c(1, 2, 5, 8, 10, 15), labels = c(1, 2, 5, 8, 10, 15)) +
+  labs(title = "SMD vs Odds Ratio for X11", 
+       x = "Odds Ratio (X11)", 
+       y = "Mean SMD") +
+  theme_bw()
+```
+
+
+### Result for **Multi-Predictor Setting**
+
+
+
+1. **X11 imbalance**: Displays how SMD changes as OR for `X11` increases, under varying OR values for `X14`.
+2. **X14 imbalance**: Shows the corresponding changes in SMD for `X14` as its OR increases, under different OR values for `X11`.
+
+Both visualizations include:
+
+- **Mean SMD values**: Points representing the average imbalance for each OR combination.
+- **95% Confidence Interval**: Error bars demonstrating variability across repetitions.
+- **Interaction Effect Representation**: Lines connecting points for each combination of OR values, highlighting the interaction effect.
+
+
+```{r}
+# Select covariates (multi-predictor case)
+region_covariates <- c("X11", "X14")  # Continuous covariates
+continuous_vars <- c("X11", "X14")
+
+# Beta combinations to test
+beta_values <- expand.grid(
+  b1 = c(0, log(2), log(5), log(10), log(15)),
+  b2 = c(0, log(2), log(5), log(10), log(15))
+)
+
+# Initialize storage for results across repetitions
+repeated_smd_results_X11X14 <- vector("list", n_repeats)
+
+# Run the repetitions
+for (rep in 1:n_repeats) {
+  message("Replication:", rep)
+  # Use test_betas for a single replication
+  results_combined_X11X14 <- test_betas(dat, beta_values, region_covariates, 
+                                        target_prob = 0.2, continuous_vars = continuous_vars, categorical_vars = NULL)
+  
+  # Store SMD results within the current replication
+  repeated_smd_results_X11X14[[rep]] <- do.call("rbind", lapply(results_combined_X11X14$results, function(x) x$Results$SMD_df))
+}
+
+# Combine replicated results and calculate mean/SD
+result_X11X14_summary <- bind_rows(repeated_smd_results_X11X14) %>%
+  group_by(Variable, formula) %>%
+  summarise(
+    Mean_SMD = mean(SMD),
+    SD_SMD = sd(SMD)
+  )
+
+
+# Combine the replicated SMD results into a structured summary
+result_X11X14_summary <- bind_rows(repeated_smd_results_X11X14) %>%
+  group_by(Variable, formula) %>%
+  summarise(
+    Mean_SMD = mean(SMD),
+    SD_SMD = sd(SMD),
+    lower_95CI = Mean_SMD - 1.96 * (SD_SMD / sqrt(n())),
+    upper_95CI = Mean_SMD + 1.96 * (SD_SMD / sqrt(n()))
+  ) %>%
+  ungroup()
+
+# Extract Odds Ratios from formulas for visualization
+result_X11X14_summary <- result_X11X14_summary %>%
+  mutate(
+    OR_b1 = gsub("~ log\\((\\d+)\\).*","\\1", formula),
+    OR_b1 = as.integer(OR_b1),
+    OR_b2 = gsub("~ .+ log\\((\\d+)\\)\\*X14","\\1", formula),
+    OR_b2 = as.integer(OR_b2)
+  )
+
+# Optional: Filter specific variables for analysis (X11 or X14)
+filtered_results_X11 <- result_X11X14_summary %>%
+  filter(Variable == "X11") %>% 
+  arrange(OR_b1)
+
+filtered_results_X14 <- result_X11X14_summary %>%
+  filter(Variable == "X14") %>%
+  arrange(OR_b2)
+
+# kable(filtered_results_X11, caption = "Imbalance of X11 among region")
+# kable(filtered_results_X14, caption = "Imbalance of X14 among region")
+```
+
+```{r fig.width= 12}
+# Visualization for X11
+p_x11 <- ggplot(filtered_results_X11, aes(x = OR_b1, y = Mean_SMD, col = factor(OR_b2), group = factor(OR_b2))) +
+  geom_point(size = 2) + # Mean points
+  geom_line(size = 1) + # Line connecting points
+  geom_errorbar(aes(ymin = lower_95CI, ymax = upper_95CI), width = 0.5) + # Error bar
+  scale_x_continuous(breaks = c(1, 2, 5, 8, 10, 15), labels = c(1, 2, 5, 8, 10, 15)) +
+  labs(title = "SMD vs Odds Ratio for X11", 
+       x = "Odds Ratio (X11)", 
+       y = "Mean SMD") +
+  theme_bw()
+
+# Visualization for X14
+p_x14 <- ggplot(filtered_results_X14, aes(x = OR_b2, y = Mean_SMD, col = factor(OR_b1), group = factor(OR_b1))) +
+  geom_point(size = 2) + # Mean points
+  geom_line( size = 1) + # Line connecting points
+  geom_errorbar(aes(ymin = lower_95CI, ymax = upper_95CI), width = 0.5) + # Error bar
+  scale_x_continuous(breaks = c(1, 2, 5, 8, 10, 15), labels = c(1, 2, 5, 8, 10, 15)) +
+  labs(title = "SMD vs Odds Ratio for X14", 
+       x = "Odds Ratio (X14)", 
+       y = "Mean SMD") +
+  theme_bw()
+
+ggarrange(p_x11, p_x14)
+
+```
+
+The observed difference in SMD between `X11` and `X14` might be attributed to the different distributional characteristics of the two variables, particularly the skewness observed in `X14`. 
+
+```{r}
+hist(dat$X11)
+hist(dat$X14)
+```
+
+
+## Covariate standardization
+
+Continuous covariates in the synthetic dataset were standardized to have a mean of 0 and standard deviation of 1. This was done to:
+
+1. Explore the impact of ORs on covariates under standardized scaling.
+2. Address the observed differences in SMD between `X11` and `X14`, and re-evaluate results under standardized covariates.
+
+After standardization, both `X11` and `X14` were scaled to remove differences in range and distribution characteristics. Histograms of the standardized variables confirm their normalization, with values tightly concentrated around the mean.
+
+
+```{r}
+## Standardize continuous variables
+dat_std <- dat %>%
+  mutate(across(.cols = names(.)[startsWith(names(.), "X") & sapply(., is.numeric)],
+                .fns = ~ scale(.)))
+
+hist(dat_std$X11)
+hist(dat_std$X14)
+```
+
+
+### Correlation between Region and standardized baseline covariates
+
+We re-fitted the univariate logistic regression model using the standardized dataset. After standardization, the OR values now reflect the relative change in odds associated with a one-unit increase in the standardized variable, equivalent to an increase of **one standard deviation** in the original variable. This adjustment ensures comparability and uniform interpretation across standardized variables.
+
+
+```{r}
+test_dat_std <- test_dat %>%
+  mutate(across(.cols = names(.)[startsWith(names(.), "X") & sapply(., is.numeric)],
+                .fns = ~ scale(.)))
+## check correlation between X3 and other covariates
+# using univariate logistic regression
+logistic_uni_results_std <- data.frame()
+
+for (var in colnames(test_dat_std)[!colnames(test_dat_std) %in% c("Region")]) {
+  model <- glm(Region ~ ., data = test_dat_std[, c(var, "Region")], family = binomial)
+  
+  coef <- coef(model)[2]
+  odds_ratio <- exp(coef)
+  
+  logistic_uni_results_std <- rbind(logistic_uni_results_std, 
+                                data.frame(Variable = var,
+                                           Coefficient = round(coef, 2),
+                                           Odds_Ratio = round(odds_ratio, 2)))
+}
+
+
+
+logistic_uni_results_std <- logistic_uni_results_std %>%
+  filter(Variable != "X3") %>%
+  rownames_to_column("var") %>%
+  mutate(type = ifelse(stringr::str_detect(var, "\\d$"),
+                       "Continuous", "Categorical"),
+         model = "Uni-variate logistic regression") %>%
+  dplyr::select(-var)
+
+# kable(logistic_uni_results_std)
+
+or_range <- range(logistic_uni_results$Odds_Ratio)
+or_range_std <- range(logistic_uni_results_std$Odds_Ratio)
+
+p1_std <- ggplot(data = logistic_uni_results_std, aes(x = Odds_Ratio, fill = type)) +
+  geom_histogram() +
+  facet_wrap(~type, nrow = 2)+
+  theme_bw() +
+  ggtitle("Odds Ratio (Standardized)")
+
+p1 <- p1 +
+  ggtitle("Odds Ratio (Scaled 0 to 1)")
+
+
+ggarrange(p1, p1_std, common.legend = TRUE)
+```
+
+Interestingly, the OR values shifted significantly after standardization, with the range of ORs changing from (`r or_range`) to (`r or_range_std`). This indicates that standardization reduces the magnitude of OR values, which aligns with the narrower scale of standardized variables. 
+
+### Region imbalance under **Standardized Multi-Predictor Setting**
+
+Next, regions were re-generated using the standardized covariates `X11` and `X14` to evaluate the resulting balance by examining changes in SMD across different OR settings.
+
+```{r}
+# Select covariates (multi-predictor case)
+region_covariates <- c("X11", "X14")  # Continuous covariates
+continuous_vars <- c("X11", "X14")
+
+# Beta combinations to test
+beta_values <- expand.grid(
+  b1 = c(0, log(2), log(5), log(10), log(15)),
+  b2 = c(0, log(2), log(5), log(10), log(15))
+)
+
+# Initialize storage for results across repetitions
+repeated_smd_results_X11X14_std <- vector("list", n_repeats)
+
+# Run the repetitions
+for (rep in 1:n_repeats) {
+  message("Replication:", rep)
+  # Use test_betas for a single replication
+  results_combined_X11X14_std <- test_betas(dat_std, beta_values, region_covariates, 
+                                        target_prob = 0.2, continuous_vars = continuous_vars, categorical_vars = NULL)
+  
+  # Store SMD results within the current replication
+  repeated_smd_results_X11X14_std[[rep]] <- do.call("rbind", lapply(results_combined_X11X14_std
+                                                                    $results, function(x) x$Results$SMD_df))
+}
+
+# Combine replicated results and calculate mean/SD
+result_X11X14_summary_std <- bind_rows(repeated_smd_results_X11X14_std) %>%
+  group_by(Variable, formula) %>%
+  summarise(
+    Mean_SMD = mean(SMD),
+    SD_SMD = sd(SMD),
+    lower_95CI = Mean_SMD - 1.96 * (SD_SMD / sqrt(n())),
+    upper_95CI = Mean_SMD + 1.96 * (SD_SMD / sqrt(n()))
+  ) %>%
+  ungroup()
+
+# Extract Odds Ratios from formulas for visualization
+result_X11X14_summary_std <- result_X11X14_summary_std %>%
+  mutate(
+    OR_b1 = gsub("~ log\\((\\d+)\\).*","\\1", formula),
+    OR_b1 = as.integer(OR_b1),
+    OR_b2 = gsub("~ .+ log\\((\\d+)\\)\\*X14","\\1", formula),
+    OR_b2 = as.integer(OR_b2)
+  )
+
+# Optional: Filter specific variables for analysis (X11 or X14)
+filtered_results_X11_std <- result_X11X14_summary_std %>%
+  filter(Variable == "X11") %>% 
+  arrange(OR_b1)
+
+filtered_results_X14_std <- result_X11X14_summary_std %>%
+  filter(Variable == "X14") %>%
+  arrange(OR_b2)
+
+# kable(filtered_results_X11_std, caption = "Imbalance of X11_std among region")
+# kable(filtered_results_X14_std, caption = "Imbalance of X14_std among region")
+```
+
+
+The results reveal two key findings:
+
+1. **SMD Comparison Between `X11` and `X14`**:  
+   Standardization made the SMD values for `X11` and `X14` more comparable, addressing the prior differences observed with raw variables. This suggests that the differences were partially driven by varying distributional properties in the unscaled data.
+
+2. **Interaction Effect**:  
+   Visualizations show that as the OR for `X14` increases, the SMD for `X11` under the same OR decreases. This highlights a potential interaction effect, where higher predictive influence from `X14` mitigates the imbalance contributed by `X11`.
+
+
+```{r fig.width=12}
+# Visualization for X11
+p_x11_std <- ggplot(filtered_results_X11_std, aes(x = OR_b1, y = Mean_SMD, col = factor(OR_b2), group = factor(OR_b2))) +
+  geom_point(size = 2) + # Mean points
+  geom_line(size = 1) + # Line connecting points
+  geom_errorbar(aes(ymin = lower_95CI, ymax = upper_95CI), width = 0.5) + # Error bar
+  scale_x_continuous(breaks = c(1, 2, 5, 8, 10, 15), labels = c(1, 2, 5, 8, 10, 15)) +
+  labs(title = "SMD vs Odds Ratio for X11_std", 
+       x = "Odds Ratio (X11_std)", 
+       y = "Mean SMD") +
+  theme_bw()
+
+# Visualization for X14
+p_x14_std <- ggplot(filtered_results_X14_std,
+                    aes(x = OR_b2, y = Mean_SMD, col = factor(OR_b1), group = factor(OR_b1))) +
+  geom_point(size = 2) + # Mean points
+  geom_line( size = 1) + # Line connecting points
+  geom_errorbar(aes(ymin = lower_95CI, ymax = upper_95CI), width = 0.5) + # Error bar
+  scale_x_continuous(breaks = c(1, 2, 5, 8, 10, 15), labels = c(1, 2, 5, 8, 10, 15)) +
+  labs(title = "SMD vs Odds Ratio for X14_std", 
+       x = "Odds Ratio (X14)", 
+       y = "Mean SMD") +
+  theme_bw()
+
+ggarrange(p_x11_std, p_x14_std)
+
+```
+
+After standardizing variables, it was observed that SMD values increased significantly under higher OR settings. This phenomenon underscores the greater separation caused by standardized scaling. 
+
+Box plot visualizations further illustrate the imbalance generated by standardized $X11$ under different OR values with $OR(X_{14} = 1)$ held constant. 
+
+These plots confirm the necessity for adjusting OR values to achieve a more balanced data generation process when using standardized covariates.
+
+
+```{r fig.width=10, fig.height=10}
+
+beta_values <- expand.grid(
+  b1 = c(0, log(1.5), log(2), log(3), log(4), log(5), log(10), log(15)),
+  b2 = c(0)
+)
+
+results_combined_X11X14_std_p <- test_betas(dat_std, beta_values, region_covariates, 
+                                        target_prob = 0.2, continuous_vars = continuous_vars, categorical_vars = NULL,
+                                        plot = TRUE)
+ggarrange(plotlist = results_combined_X11X14_std_p$result_plot[seq(1, 15, 2)], common.legend = TRUE)
+
+```
+
+
+## Next plan
+
+1. Simulate region variable using standardized covariates.
+
+2. Generate region using different formula in four scenarios:
+
+    2a. With predictive covariate for scenarios 1-4.
+    
+    2b. Predictive covariate & prognostic covariate for scenario 1, to test if associated prognostic will affect the identification of regional effect modifier.
+
+
