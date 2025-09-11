@@ -1,0 +1,220 @@
+---
+title: "MRCT_simulation_proposal"
+author: "Cong Zhang"
+date: "2025-09-11"
+# output: html_document
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Simulation Data Generation: Regional Effect Modifier Analysis in MRCTs
+
+In the framework to study regional variability in **multi-regional clinical trials (MRCTs)**. Our overarching objectives are:
+
+1. **Evidence for Regional Variability**:
+   Assess the presence of regional variability in treatment effects across MRCTs.
+2. **Regional Effect Modifiers**:
+   Identify baseline covariates that interact with treatment effects at the regional level and investigate how observed/unobserved covariates contribute to regional heterogeneity.
+3. **Visualization**:
+   Develop both tabular and graphical outputs to better understand and interpret regional heterogeneity results.
+
+Here we start with **Regional Effect Modifiers** and **Visualization**, focusing on simulation data generation. 
+
+---
+
+## **Research Questions**
+
+To study the impact of regional variability on treatment effects, we aim to answer the following key research questions:
+
+### Question 1: Regional association with observable predictive variables
+- **Objective**: Investigate whether **observable** predictive covariates associated with the region (regional effect modifier) contribute to regional heterogeneity in treatment effect and can be identified.
+- **Design**: Introduce region as a variable derived from predictive covariates and systematically vary the correlation strength (imbalance between region).
+
+### Question 2: Regional association with unobserved variables
+- **Objective**: Study when regional effect modifier is **unobserved** if $region$ appears as direct treatment effect modifier and the influence on the rest effect modifiers.
+- **Design**: Generate region based on specific predictive covariates as in Q1 but exclude those covariates from the input dataset to mimic unobserved variables.
+
+### Question 3: The impact of region-associated prognostic variables
+- **Objective**: Demonstrate the influence of region-associated prognostic variables on identifying regional effect modifiers.
+- **Design**: Generate region based on specific predictive covariates and prognostic covariates.
+
+---
+
+## **Data Source and Structure**
+
+All baseline covariates except region are simulated as in the benchtm package. The dataset includes 30 covariates (\( X_1, X_2, ..., X_{30} \)) with the following characteristics:
+- A mix of continuous and categorical variables.
+- Synthetic values structured to mimic real-world baseline characteristics.
+
+### **Region Variable Generation**
+
+The region variable (\( \text{Region: Asia (20%) vs. non-Asia (80%)} \)) is generated using a logistic regression model:
+\[
+\text{logit}(P(\text{Region = Asian})) = \beta_0 + \beta_1 X_1 + \beta_2 X_2 + \ldots
+\]
+- **Covariates associated with the region**: selected predictive and/or prognostic covariates (\( X_1, X_2, ...\)).
+- **Standardized covariates**: Continuous variables are standardized (mean = 0, SD = 1) during logistic regression to ensure the odds ratio (OR) is interpretable as a one-SD change in the covariate.
+
+To maintain a region size of 20%, \( \beta_0 \) is iteratively adjusted while varying \( \beta_1, \beta_2, \ldots \) to control correlation strength (OR).
+
+---
+
+## **Benchtm Scenarios**
+
+
+| **Scenario** | **Functional Form**                                                                                                                                              | **Description**                                                                                                                                                        |
+|--------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Scenario 1   | \(\text{logit}(P(Y=1)) = s \times (0.5 \cdot I(X_1 = Y) + X_{11}) + A(\beta_0 + \beta_1 \Phi(20(X_{11} - 0.5)))\)                                                 | Treatment effect depends on a single predictive covariate (\(X_{11}\)).                                                                                                |
+| Scenario 2   | \(\text{logit}(P(Y=1)) = s \times (X_{14} - I(X_8 = N)) + A(\beta_0 + \beta_1 X_{14})\)                                                                          | Treatment effect depends on multiple predictive covariates (\(X_{14}\), \(X_8\)).                                                                                      |
+| Scenario 3   | \(\text{logit}(P(Y=1)) = s \times (I(X_1 = N) - 0.5 \cdot X_{17}) + A(\beta_0 + \beta_1 I((X_{14} > 0.25) \cap (X_1 = N)))\)                                     | Treatment effect depends on an interaction between predictive covariates (\(X_1\), \(X_{17}\), \(X_{14}\)).                                                            |
+| Scenario 4   | \(\text{logit}(P(Y=1)) = s \times (X_{11} - X_{14}) + A(\beta_0 + \beta_1 I((X_{14} > 0.3) \lor (X_4 = Y)))\)                                                   | Treatment effect depends on a shifted interaction or nonlinear function of predictive covariates (\(X_{11}\), \(X_{14}\), and \(X_4\)).                                 |
+
+**Note**:
+
+1. These scenarios provide baseline structures for treatment effect heterogeneity (TEH), response `y` is generated with different treatment interaction strength as described in benchtm.
+
+2. the additional region variable is incorporated as per the questions addressed below.
+
+---
+
+## **Simulation Settings**
+
+### **Scenario 1: Regional association with observable predictive variables**
+
+- **Objective**: Explore the relationship between predictive covariates and region to assess their contribution to regional heterogeneity in treatment effects.
+- **Data generation**:
+  - The region variable (\( \text{Region = Asian} \)) is derived using a logistic regression model with predictive variables in each of the four data scenarios from benchtm.
+  - Region imbalance: 
+      - OR values for each predictive covariate are systematically varied: \( 1, 1.5, 2, 5, 10, 20 \) for single-covariate correlation.
+      - For multiple predictive covariates, each covariate independently traverses \( 1, 2, 5, 20 \), resulting in combinations (e.g., OR = \( 1 \) for \( X_1 \), OR = \( 5 \) for \( X_2 \)).
+  - Treatment interaction: set with different values as described in benchtm paper.
+  
+
+
+### **Scenario 2: Regional association with unobserved variables**
+
+- **Objective**: Assess how unobserved variables influence the identification of regional effect modifiers.
+- **Data generation**:
+  - Generate region using predictive covariates as in Scenario 1.
+  - Exclude the primary region-correlated covariate(s) from the input dataset during regional effect modifier analysis.
+  
+      - Single predictive covariate (\( X_{11} \)): Explore removal from the dataset.
+      - Multiple predictive covariates: Exclude combinations (e.g., retain \( X_{14} \) but remove \( X_{11} \)).
+
+---
+
+### **Scenario 3: Impact of region-associated prognostic variables**
+
+- **Objective**: Examine the influence of region-correlated prognostic variables on regional effect modifier identification.
+- **RData generation**:
+  - Generate region using a single predictive variable and one additional prognostic variable correlated with the region.
+  - Applied **only** to benchtm Scenario 1 (single predictive variable) to maintain result interpretability in the demonstration manuscript.
+  - OR values for prognostic and predictive covariates independently traverse \( 1, 2, 5, 20 \).
+
+---
+
+### **Future Exploration**
+
+- Incorporating multiple regions (e.g., Asia, Europe, North America) or alter the propotion of region to reflect more realistic MRCT designs.
+
+
+
+# Evaluation Metrics for Regional Effect Modifier Analysis
+
+This section outlines the evaluation metrics and outputs for assessing the simulation and analysis workflow in the context of identifying regional effect modifiers. The evaluation is divided into **two primary contexts**:
+
+1. **Context 1**: No regional variability (\( OR \approx 1, \beta_{interaction} = 0 \)).
+2. **Context 2**: Existing regional variability (\( OR > 1, \beta_{interaction} > 0 \)), further divided into:
+   - **Observed Region**: Regional covariates are present in the dataset.
+   - **Unobserved Region**: Regional covariates are excluded from the dataset (completely or partially).
+
+---
+
+## **Context 1: No Regional Variability (\( OR \approx 1, \beta_{interaction} = 0 \))**
+
+### **Evaluation Metrics**
+
+1. **Effect Modifier Selection Probability**:
+
+   - Probability that each covariate is selected as an *effect modifier* (Top 5) using the WATCH workflow.
+
+2. **Regional Covariate Selection Probability**:
+
+   - Probability that each covariate is identified as a *candidate regional covariate* using region as the response.
+
+3. **Regional Effect Modifier Selection Probability**:
+
+   - Probability that a covariate is explicitly categorized as a **regional effect modifier** (i.e., appears in the intersection set).
+
+
+
+4. **Empty Intersection Probability**:
+
+   - Probability that the **intersection** of effect modifiers and regional covariates is empty set. 
+
+
+5. **AUC Summary (vs OR)**:
+
+   - Area Under the Curve (AUC) computed for candidate regional covariates, stratified by OR values.
+   
+   
+---
+
+## **Context 2: Existing Regional Variability (\( OR > 1, \beta_{interaction} > 0 \))**
+
+---
+
+
+### **Evaluation Metrics**
+
+There are two subcases with **Observed Regional effect modifier** or **Unobserved Regional effect modifier**. The evaluation 3-5 are important for  **Unobserved Regional effect modifier**. Metric 6-7 and optional.
+
+1. **True Positive Rate in Regional effect modifier**:
+
+   - Probability that true regional covariates are part of the **intersection set** (identified as regional effect modifiers) vs OR.
+
+2. **True Positive Rate in Regional covariate**:
+
+   - Probability that candidate regional covariates include the true regional drivers vs OR.
+
+3. **AUC Summary**:
+
+   - Mean AUC and CI of candidate regional covariates.
+
+
+4. **Effect Modifiers Containing Region**:
+
+   - Proportion of simulation replicates where effect modifiers include $region$.
+   - Expected Outcome: High probability under unobserved variability.
+   
+5. **Empty Intersection Probability**:
+
+   - Probability that the **intersection** of effect modifiers and regional covariates is empty.
+   - Expected Outcome: High probability of empty intersections under unobserved variability.
+
+
+6. **Proxy Covariate Selection**:
+                                                                                                                                 
+   - Evaluate whether covariates weakly correlated with the unobserved region drivers are selected as proxies.
+
+
+7. **Sensitivity and Specificity**:
+                                                                                                                                 
+   - **Sensitivity**: Fraction of true regional effect modifiers correctly identified in the intersection.
+   - **Specificity**: Fraction of identified regional effect modifiers that are true positives.
+
+
+
+## **Regional imbalance**
+
+We also want to have a  **Regional Imbalance Metrics** for evaluating simulated data:
+
+   - Standardized mean difference (SMD)/Pearson coefficient for key covariates across regions.
+
+
+
+
